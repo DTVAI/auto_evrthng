@@ -1,9 +1,11 @@
 """Static, locally scoped catalogue of the HR toolbox's 81 process definitions."""
+
 from functools import lru_cache
 import json
 from pathlib import Path
 
 _DATA = Path(__file__).parent / "data" / "catalog.json"
+
 
 @lru_cache(maxsize=1)
 def catalog():

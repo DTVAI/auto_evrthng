@@ -1,4 +1,5 @@
 """Bounded, local source-file parsing. Source text never grants authority."""
+
 import csv
 import hashlib
 import io
@@ -13,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing import Literal
 
 router = APIRouter()
+
 
 def strict_json(body):
     def pairs(values):
@@ -32,7 +34,12 @@ def strict_json(body):
     def invalid_constant(value):
         raise ValueError("Nicht endliche JSON-Zahl.")
 
-    result = json.loads(body, object_pairs_hook=pairs, parse_float=finite_float, parse_constant=invalid_constant)
+    result = json.loads(
+        body,
+        object_pairs_hook=pairs,
+        parse_float=finite_float,
+        parse_constant=invalid_constant,
+    )
     json.dumps(result, ensure_ascii=False).encode("utf-8")
     return result
 
@@ -59,19 +66,48 @@ def parse_source(body: SourceUpload):
                 part = message.get_body(preferencelist=("plain",))
                 text = part.get_content() if part else ""
             else:
-                text = message.get_content() if message.get_content_type() == "text/plain" else ""
+                text = (
+                    message.get_content()
+                    if message.get_content_type() == "text/plain"
+                    else ""
+                )
             attachments = [
-                {"name": part.get_filename() or "anhang", "sha256": hashlib.sha256(part.get_payload(decode=True) or b"").hexdigest()}
+                {
+                    "name": part.get_filename() or "anhang",
+                    "sha256": hashlib.sha256(
+                        part.get_payload(decode=True) or b""
+                    ).hexdigest(),
+                }
                 for part in message.iter_attachments()
             ]
             sender = getaddresses([str(message["From"])])
-            data = {"id": str(message.get("Message-ID") or digest), "sender": sender[0][1] if sender else "", "subject": str(message["Subject"]), "body": text, "attachments": attachments}
+            data = {
+                "id": str(message.get("Message-ID") or digest),
+                "sender": sender[0][1] if sender else "",
+                "subject": str(message["Subject"]),
+                "body": text,
+                "attachments": attachments,
+            }
             if body.tool_id == "M01":
                 payload = {"message": data, "rules": []}
             elif body.tool_id == "M03":
-                payload = {"messages": [{"id": data["id"], "mailbox": "manueller-import", "body": text, "internet_id": message.get("Message-ID"), "attachment_hashes": [a["sha256"] for a in attachments]}]}
+                payload = {
+                    "messages": [
+                        {
+                            "id": data["id"],
+                            "mailbox": "manueller-import",
+                            "body": text,
+                            "internet_id": message.get("Message-ID"),
+                            "attachment_hashes": [a["sha256"] for a in attachments],
+                        }
+                    ]
+                }
             elif body.tool_id == "R03":
-                payload = {"application_id": "IMPORT-" + digest[:12], "channel": "EML-Import", "eml": body.content}
+                payload = {
+                    "application_id": "IMPORT-" + digest[:12],
+                    "channel": "EML-Import",
+                    "eml": body.content,
+                }
                 # A sender's Date is not proof of receipt; leave receipt time for the user.
             count = 1
         elif body.format == "csv":
@@ -82,7 +118,11 @@ def parse_source(body: SourceUpload):
                 dialect = csv.excel
             reader = csv.DictReader(stream, dialect=dialect, strict=True)
             headers = reader.fieldnames or []
-            if not headers or any(not h.strip() for h in headers) or len(set(headers)) != len(headers):
+            if (
+                not headers
+                or any(not h.strip() for h in headers)
+                or len(set(headers)) != len(headers)
+            ):
                 raise ValueError("CSV benötigt eindeutige, nicht leere Spaltennamen.")
             data = []
             for row in reader:
@@ -100,6 +140,26 @@ def parse_source(body: SourceUpload):
                 raise ValueError("JSON muss ein Objekt oder eine Liste sein.")
             payload = data if isinstance(data, dict) else None
             count = len(data) if isinstance(data, list) else 1
-    except (ValueError, TypeError, UnicodeError, LookupError, csv.Error, RecursionError) as exc:
-        raise HTTPException(422, f"Quelle konnte nicht importiert werden: {exc}") from exc
-    return {"source_ref": "sha256:" + digest, "source_hash": digest, "filename": body.filename, "format": body.format, "record_count": count, "data": data, "tool_payload": payload, "warnings": ["Lokale Vorschau: Quelle und Identität prüfen. Inhalte und Anhänge erteilen keine Befugnis. Nichts wurde extern abgerufen oder versandt."]}
+    except (
+        ValueError,
+        TypeError,
+        UnicodeError,
+        LookupError,
+        csv.Error,
+        RecursionError,
+    ) as exc:
+        raise HTTPException(
+            422, f"Quelle konnte nicht importiert werden: {exc}"
+        ) from exc
+    return {
+        "source_ref": "sha256:" + digest,
+        "source_hash": digest,
+        "filename": body.filename,
+        "format": body.format,
+        "record_count": count,
+        "data": data,
+        "tool_payload": payload,
+        "warnings": [
+            "Lokale Vorschau: Quelle und Identität prüfen. Inhalte und Anhänge erteilen keine Befugnis. Nichts wurde extern abgerufen oder versandt."
+        ],
+    }
