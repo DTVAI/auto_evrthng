@@ -1,0 +1,7 @@
+# Tool input contracts
+
+`app.contracts.input_schema(tool_id)` exposes the JSON Schema for each of the 81 active local tools. The schema supplies labels, required fields, nested records and collection item types. `validate_payload(tool_id, payload)` returns a defensive copy or raises `ValueError` with the offending path. Empty collections are accepted when their shape is valid; domain previews decide whether the evidence is sufficient. Structured records reject unknown fields. Dynamic fact and template maps accept finite JSON values because their keys are defined by the user; nesting, collection sizes and string lengths are bounded. R06's approved and observed fields have an explicit allowlist.
+
+Money and decimal measurements use finite decimal strings, avoiding binary float and boolean coercion. The orchestration metrics also accept integers, as used by their canonical examples. Dates use ISO dates; recruiting timestamps require an explicit offset. T03 retains its existing local timestamp convention. Scope approvals are local evidence, not independent authorization.
+
+`app.registry.tool_definition(tool_id)` joins the static explanatory catalogue to the live domain sample, schema and current sample status. `catalog()` returns those definitions. Help examples and field examples are derived from the live sample so they cannot drift from it. The domain remains responsible for business decisions, evidence sufficiency, and chronological relationships.
