@@ -82,9 +82,10 @@ Dateiimport und dauerhafte Aufträge. Für die optionale Browserprüfung:
 
 ```bash
 # Mit gestartetem Server und installiertem Playwright/Chromium:
-python -m pip install --require-hashes -r requirements-browser.lock
-python tests/browser_smoke.py
-python tests/browser_optimizations.py
+.venv/bin/python -m pip install --require-hashes -r requirements-browser.lock
+# Vorhandenes Chromium über CHROMIUM_PATH auswählen oder mit Playwright installieren.
+.venv/bin/python tests/browser_smoke.py
+.venv/bin/python tests/browser_optimizations.py
 ```
 
 ## Betriebsumfang

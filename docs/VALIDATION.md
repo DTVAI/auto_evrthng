@@ -43,9 +43,9 @@ nicht als geprüft ausgegeben.
 .venv/bin/python -m pytest -q -W error
 node --check app/static/app.js
 .venv/bin/python -m compileall -q app tests
-# Gepinntes Quality-Paket optional in eigener Umgebung installieren:
-# python -m pip install --require-hashes -r requirements-quality.lock
-ruff format --check app tests
+# Gepinntes Quality-Paket in der Projektumgebung installieren:
+.venv/bin/python -m pip install --require-hashes -r requirements-quality.lock
+.venv/bin/ruff format --check app tests
 ```
 
 Für die Browserabnahme Playwright aus `requirements-browser.lock` installieren,
