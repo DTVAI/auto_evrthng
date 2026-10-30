@@ -1,0 +1,11 @@
+# Architektur
+
+Die Anwendung ist ein lokales FastAPI-Programm. `app/main.py` stellt Endpunkte für Werkzeuge, Fälle, Revisionen, Freigaben, Nachweise, Prüfläufe und Aufträge bereit. Die Middleware akzeptiert lokale Hosts und gleich-origin Anfragen; schreibende API-Aufrufe benötigen zusätzlich `X-Toolbox-Request: 1`.
+
+`app/catalog.py` liest den mitgelieferten statischen Katalog `app/data/catalog.json`. `app/services.py` routet alle sechs Bereiche an `app/domains/communication.py`, `recruiting.py`, `personnel.py`, `staffing.py`, `orchestration.py` oder `platform.py`. Die Domain-Module bewerten gelieferte JSON-Daten lokal und geben Status, Prüfhinweise und gegebenenfalls Textentwürfe zurück. `help.sample_input` ist synthetische Eingabehilfe, keine validierte Geschäftsregel oder Produktionsfreigabe.
+
+SQLAlchemy persistiert Fälle, Revisionen, Freigaben, Nachweise, Ereignisse, Prüfläufe, Aufträge und Artefakte. Standardmäßig nutzt die Anwendung SQLite (`./toolbox.db`); `TOOLBOX_DATABASE_URL` kann eine lokale Datenbankadresse konfigurieren. Hashes binden Eingaben und Freigaben an eine Revision. Der Abschluss eines Falls erfordert für genau diese Revision eine Freigabe und einen passenden `independent_readback`-Nachweis mit Quelle; die Anwendung speichert die manuelle Attestierung, aber prüft den externen HR-Datensatz nicht selbst.
+
+Der Worker in `app/worker.py` verarbeitet zeitfällige Datenbankaufträge mit Claim und fünfminütiger Lease. `POST /api/jobs` erstellt einen Auftrag; `GET /api/jobs` zeigt Status und `run_id`; `GET /api/runs/{id}` gibt das Prüfergebnis zurück. `python -m app.worker --once` verarbeitet höchstens einen fälligen Auftrag. Ohne `--once` pollt der Worker standardmäßig alle fünf Sekunden. Der Worker führt nur dieselben lokalen Prüfungen aus; er versendet, schreibt oder liest keine externen Systeme.
+
+Alle Auswertungen laufen im Modus `local/dry_run`. Eingangsdaten können als lokale EML-, JSON- oder CSV-Dateien manuell bereitgestellt werden. Antworttexte und Dokumente werden lokal als Entwürfe erzeugt. Externe HR-Änderungen werden außerhalb des Werkzeugs ausgeführt; eine HR-Rolle liest das Ergebnis manuell zurück und belegt es im Fall. Mailversand, Kalenderaktionen, HR-Schreibzugriffe, Buchung und automatisierte externe Rücklesung sind nicht konfiguriert.
