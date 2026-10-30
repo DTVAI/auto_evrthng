@@ -1,9 +1,13 @@
 # Optimierungsplan für Werkraum
 
 Stand: 30.10.2026. Grundlage ist das [Review mit Befunden F01–F17](REVIEW.md).
-Status aller folgenden Pakete: **geplant, noch nicht umgesetzt**. Die jetzige
-Änderung enthält Review und reproduzierbare Fehlerfälle; der Anwendungscode
-wurde dafür nicht funktional umgebaut.
+Der folgende Plan beschreibt die vereinbarten Arbeitspakete und Abnahmekriterien.
+**OP01–OP06 sind inzwischen lokal implementiert**, OP07 ist durch ein
+Readiness-Manifest vorbereitet; der echte Fachpilot und das bedingte OP08
+benötigen organisatorische bzw. externe Voraussetzungen. Verbindlichen aktuellen
+Umfang und Prüfnachweise führen [Paketstatus](OPTIMIZATION_STATUS.md) und
+[Abnahme](VALIDATION.md). Die nachstehenden Anforderungen bleiben als
+nachvollziehbare Grundlage erhalten.
 
 ## Ziel und Reihenfolge
 

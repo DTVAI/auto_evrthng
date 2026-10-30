@@ -1,5 +1,14 @@
 # Review der bisherigen Umsetzung
 
+**Fortschreibung nach Umsetzung der Optimierungen:** F01–F17 sind im lokalen
+Pilot korrigiert. Die früheren 13 Fehlernachweise laufen jetzt ohne `xfail` als
+normale Tests in `tests/test_review_regressions.py`. Neue Vertrags-, Workflow-,
+Betriebs- und Browserprüfungen ergänzen die frühere Basis. Maßgeblich für den
+aktuellen Stand sind [Paketstatus](OPTIMIZATION_STATUS.md) und
+[Abnahme](VALIDATION.md). Die folgenden Befunde dokumentieren den historischen
+Ausgangszustand vor den Korrekturen; Aussagen über offene Fehler und 55/13
+Ergebnisse gelten für diesen früheren Reviewstand.
+
 Stand: 30.10.2026. Geprüft wurden Anwendungskern, sechs Fachmodule, Master-UI,
 Dokumentation, Tests, Dateiimport, Worker und lokale Sicherung. Drei unabhängige
 Reviews (Terra 6.1 für Backend/Fachlogik, Luna für UI/Dokumentation) wurden mit
@@ -81,7 +90,7 @@ prüfen, nicht nur Aufrufbarkeit oder einen akzeptierten Status.
 
 ```bash
 .venv/bin/python -m pytest -q
-.venv/bin/python -m pytest tests/test_known_review_gaps.py -v -rx
+.venv/bin/python -m pytest tests/test_review_regressions.py -v
 node --check app/static/app.js
 ```
 

@@ -1,11 +1,58 @@
-# Architektur
+# Architektur des optimierten lokalen Piloten
 
-Die Anwendung ist ein lokales FastAPI-Programm. `app/main.py` stellt Endpunkte für Werkzeuge, Fälle, Revisionen, Freigaben, Nachweise, Prüfläufe und Aufträge bereit. Die Middleware akzeptiert lokale Hosts und gleich-origin Anfragen; schreibende API-Aufrufe benötigen zusätzlich `X-Toolbox-Request: 1`.
+FastAPI stellt die Master-UI und APIs für Tools, Vorgänge, Revisionen, Freigaben,
+Belege, Prüfaufträge, Übernahmen und Fallketten bereit. Es bleiben ein lokaler
+Dienst, eine SQLite-Datenbank und ein separat startbarer DB-Worker. Lokale
+Host-/Origin-Prüfung und `X-Toolbox-Request: 1` schützen Browseraufrufe; sie sind
+kein Ersatz für Mehrbenutzer-Authentisierung.
 
-`app/catalog.py` liest den mitgelieferten statischen Katalog `app/data/catalog.json`. `app/services.py` routet alle sechs Bereiche an `app/domains/communication.py`, `recruiting.py`, `personnel.py`, `staffing.py`, `orchestration.py` oder `platform.py`. Die Domain-Module bewerten gelieferte JSON-Daten lokal und geben Status, Prüfhinweise und gegebenenfalls Textentwürfe zurück. `help.sample_input` ist synthetische Eingabehilfe, keine validierte Geschäftsregel oder Produktionsfreigabe.
+## Gemeinsame Verträge
 
-SQLAlchemy persistiert Fälle, Revisionen, Freigaben, Nachweise, Ereignisse, Prüfläufe, Aufträge und Artefakte. Standardmäßig nutzt die Anwendung SQLite (`./toolbox.db`); `TOOLBOX_DATABASE_URL` kann eine lokale Datenbankadresse konfigurieren. Hashes binden Eingaben und Freigaben an eine Revision. Der Abschluss eines Falls erfordert für genau diese Revision eine Freigabe und einen passenden `independent_readback`-Nachweis mit Quelle; die Anwendung speichert die manuelle Attestierung, aber prüft den externen HR-Datensatz nicht selbst.
+`contracts.py` definiert alle 81 strukturierten Eingabeschemata mit Typen,
+Pflichtfeldern, zulässigen Schlüsseln und begrenzten JSON-Werten. `registry.py`
+verbindet sie mit den kanonischen Domain-Beispielen und Katalogtexten. Die UI
+nutzt dasselbe Schema für Formulare und Hilfe; die API validiert unabhängig davon.
+`decisions.py` bildet kanonische Entscheidungsumfänge und Hashes. Eine lokale
+Attestierung ist Prüfdatenmaterial und begründet keine tatsächliche Rolle.
 
-Der Worker in `app/worker.py` verarbeitet zeitfällige Datenbankaufträge mit Claim und fünfminütiger Lease. `POST /api/jobs` erstellt einen Auftrag; `GET /api/jobs` zeigt Status und `run_id`; `GET /api/runs/{id}` gibt das Prüfergebnis zurück. `python -m app.worker --once` verarbeitet höchstens einen fälligen Auftrag. Ohne `--once` pollt der Worker standardmäßig alle fünf Sekunden. Der Worker führt nur dieselben lokalen Prüfungen aus; er versendet, schreibt oder liest keine externen Systeme.
+Die sechs Module unter `app/domains` führen ausschließlich lokale Berechnungen,
+Vergleiche und Entwurfserzeugung aus. `projections.py` beschreibt relevante
+Sollwerte: etwa Person, neuer Stundenwert und Datum, Dokumenthash oder berechnete
+Aufgabentermine. Beobachtungen müssen diese Werte mit passenden JSON-Typen
+enthalten. Leere Ziele, falsche Person, veraltete Revision oder ungeklärter
+lokaler Prüfstatus erlauben keinen Abschluss. Ein passender manueller Nachweis
+wird als `manual_attestation` ausgewiesen, nicht als automatisch rückgelesen.
 
-Alle Auswertungen laufen im Modus `local/dry_run`. Eingangsdaten können als lokale EML-, JSON- oder CSV-Dateien manuell bereitgestellt werden. Antworttexte und Dokumente werden lokal als Entwürfe erzeugt. Externe HR-Änderungen werden außerhalb des Werkzeugs ausgeführt; eine HR-Rolle liest das Ergebnis manuell zurück und belegt es im Fall. Mailversand, Kalenderaktionen, HR-Schreibzugriffe, Buchung und automatisierte externe Rücklesung sind nicht konfiguriert.
+## Persistenz und Fallketten
+
+SQLAlchemy speichert Fälle, Revisionen einschließlich neuer Titel-/Personen-
+Metadaten, Freigaben, Nachweise, Ereignisse, Artefakte, Jobs und Wiederholungsschlüssel.
+`workflow_models.py` ergänzt Fallketten, Schrittgenerationen, Ereignisse und
+atomare Fallübernahmen. `workflows.py` führt drei lokale Graphen: `hours_change`,
+`start_shift` und `staffing_invoice`. Ein Schritt darf nur an einen passenden,
+aktuell abgeschlossenen Fall gebunden werden. Fachliche Querbezüge werden
+geprüft; geänderte Voraussetzungen entwerten transitive Folgeschritte und
+bewahren frühere Generationen. Bestätigte unabhängige Schritte bleiben erhalten.
+
+Metriken zählen persistierte Ereignisse, Korrekturen, offene Eingaben und
+Abschlüsse. Laufzeit folgt realen Zeitstempeln. Bearbeitungs- und Wartezeit werden
+nicht erfunden. Übernahme-/Vertretungslabels koordinieren den lokalen Nutzer;
+sie sind keine authentisierten Rechte gegen andere Konten.
+
+## Betrieb
+
+`migrations.py` migriert Schema 0/1 nach Version 2 ohne Zurücksetzen vorhandener
+Daten. Nicht rekonstruierbare historische Titel/Personenmetadaten bleiben NULL.
+Verbindungen erzwingen SQLite-Fremdschlüssel. PK/FK, Typaffinität, notwendige
+Spalten und Unique-Regeln werden vor Betrieb und Restore geprüft.
+
+Private SQLite-Dateien/Sidecars sind unter POSIX erforderlich; unsichere
+bestehende Pfade werden abgelehnt. Der Worker verwendet atomare Claims und
+Lease-Tokens, begrenztes Backoff für Locks sowie Quarantäne nach wiederholt
+fehlgeschlagenen Jobs. Heartbeat-/Fehlerlogs enthalten technische Referenzen.
+Alle API-Zeitstempel haben einen UTC-Offset. Requestgrößen werden während des
+Lesens begrenzt, JSON-Tiefe und Listengrößen vor der Auswertung geprüft.
+
+Manueller EML-/JSON-/CSV-Import wird nur lokal geparst. Außenadapter, Graph,
+Abrechnungsübermittlung, automatischer Versand und unabhängige externe
+Readbacks sind nicht freigeschaltet. Details: [Betriebsgrenzen](DEPLOYMENT.md).

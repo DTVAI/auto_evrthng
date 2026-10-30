@@ -8,6 +8,9 @@
 - Lokale Antwort- und Dokumententwürfe, Berechnungen, Abgleiche und Berichte. Entwürfe belegen weder Versand noch Unterzeichnung.
 - Manuelle Erfassung externer HR-Rücklesungen zur jeweiligen Fallrevision.
 - Dauerhafte lokale Auftragswarteschlange mit Fälligkeitszeit, Lease und lokalem Prüflauf; der Worker führt keine Außenwirkung aus.
+- Typisierte Eingabeverträge für alle 81 Tools, revisionsgebundene Sollwert-Nachweise, datenerhaltende SQLite-Migration und Schema-/Schlüsselprüfung bei Sicherung und Restore.
+- Drei gespeicherte Fallketten mit Abhängigkeiten, gezielter Invalidierung und Historie; lokale atomare Übernahmen/Vertretungen ohne Behauptung echter Rollenrechte.
+- Verschachtelte Formularbearbeitung, CSV-Spaltenzuordnung, zugängliche Tastatur-Tabs und Warnung vor dem Verlassen ungespeicherter Entwürfe.
 - Lokale ANÜ-Rechnungsprüfung: Rechnungslinien können gegen erfasste Bestellung, bestätigte Stunden und Konditionen gerechnet und Abweichungen markiert werden. Das ist keine Rechnungsbuchung oder Zahlungsfreigabe.
 
 ## Vom Auftrag ausgeschlossen

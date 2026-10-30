@@ -1,5 +1,20 @@
 # Scenario test coverage
 
+## Optimization acceptance added
+
+The current suite additionally covers actual local database migration/restore,
+job lock recovery/quarantine, revision metadata, 81 concrete business outcomes,
+schema/import interoperability, and all three persisted local workflow chains.
+See `tests/test_ops_optimizations.py`, `test_tool_results.py`,
+`test_workflow_chains.py`, `test_api_optimizations.py`, `test_contracts.py`, and
+`test_review_regressions.py`. The latter contains ordinary passing tests,
+not expected-failure markers. Browser checks include nested inputs, blank
+numeric fields, CSV mapping, keyboard tabs/focus, DST offset input and warnings
+for unsaved work across workspaces. Current evidence: [VALIDATION.md](VALIDATION.md).
+
+The older table below describes the pure calculators specifically; its limits
+do not imply that the newer local DB/worker/backup tests are unexecuted.
+
 The following tests in `tests/test_orchestration_platform.py` execute the pure calculators with supplied synthetic inputs. `python -m unittest tests.test_orchestration_platform -v` runs them. READY in these tests means the supplied input passed that preview's checks; it does not establish that an external action happened.
 
 | Scenario | Actual test |

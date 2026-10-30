@@ -1,13 +1,38 @@
-# Local SQLite backup and restore
+# Lokale SQLite-Sicherung und Wiederherstellung
 
-The pilot stores cases, artifacts, pending jobs, and other application records in one SQLite database. Use the database file configured for the application; these commands operate only on local paths. The snapshot uses SQLite's backup API, so committed data in a WAL is included consistently while the application is running. The live database is not modified by this command.
+Alle lokalen Vorgänge, Artefakte und Aufträge liegen in der SQLite-Datei. Die
+SQLite-Backup-API sichert einen konsistenten Stand einschließlich bestätigter
+WAL-Daten, ohne die aktive Datenbank zu ersetzen.
 
 ```sh
-python -m app.backup create --database /path/to/pilot.db --output /path/to/new-backup-directory
-python -m app.backup verify --backup /path/to/new-backup-directory
-python -m app.backup restore --backup /path/to/new-backup-directory --output /path/to/new-restored.db
+.venv/bin/python -m app.backup create --database toolbox.db --output /geschuetzter/pfad/neue-sicherung
+.venv/bin/python -m app.backup verify --backup /geschuetzter/pfad/neue-sicherung
+.venv/bin/python -m app.backup restore --backup /geschuetzter/pfad/neue-sicherung --output /geschuetzter/pfad/neue-datenbank.db
 ```
 
-Create requires a new directory and writes `backup.db` plus `manifest.json` containing the SHA-256 digest, schema version, UTC creation time and fixed database name. Create, verify and restore check SQLite integrity and foreign keys. Restore copies to a temporary file, checks the copied bytes and database, then publishes the result atomically without overwriting an existing destination. Restore to a new location and configure the application to use it after checking the result; it does not replace a live database. Each command exits nonzero on failure. Failed creation removes its newly created directory; failed restore removes its temporary file.
+Ausgabeverzeichnis und Restore-Datei müssen neu sein. Es wird nichts Bestehendes
+überschrieben. Das Manifest trennt `manifest_format_version` und
+`application_schema_version`, speichert SHA-256 und UTC-Erstellzeit. Prüfung
+und Restore verlangen Integrität, Fremdschlüsselkonsistenz, Anwendungsidentität,
+unterstützte Schemaversion sowie tatsächliche Tabellen, Typaffinitäten, PK/FK
+und Unique-Regeln. Eine leere oder fremde Datenbank ist keine gültige Sicherung.
+Unterstützte vollständige Legacy-Datenbanken können geprüft und beim späteren
+Anwendungsstart auf Schema 2 migriert werden.
 
-This is a validated local snapshot, not an encrypted backup or a production recovery certification. The database and backup can contain sensitive records; protect the directory and arrange encryption, retention, off-host copies, and periodic operational recovery exercises separately. The manifest detects accidental changes but is not authenticated: a party able to alter both the database and manifest can replace them. No environment secrets are intentionally added to the manifest, but any sensitive content already stored in the database is included. Files stored outside the database are not backed up.
+Restore prüft die tatsächlich kopierten Bytes und veröffentlicht atomar an
+einem neuen Pfad. Danach zunächst in einer isolierten Instanz prüfen und
+`TOOLBOX_DATABASE_URL` bewusst umstellen; nie eine laufende DB überschreiben.
+Fehler beenden die CLI mit einem nicht-null Exitcode.
+
+Unter POSIX erzeugt die Anwendung die DB privat (0600) und lehnt vorhandene
+zu offene DB-/Sidecar-Dateien sowie durch andere Benutzer beschreibbare
+Elternverzeichnisse ab. Vorhandene Nutzerdaten werden nicht heimlich verschoben
+oder chmod-umgestellt. Unter Windows sind Benutzer-ACLs für die Ablage durch den
+Betrieb einzurichten. Eine lokale Sicherung ersetzt weder Verschlüsselung,
+Aufbewahrungsregeln, geschützte Offsite-Kopien noch einen betrieblichen Restoreplan.
+Ein Hash ohne unabhängige Signatur authentisiert den Ersteller nicht.
+
+Vor der aktuellen Migration wurde die bisherige Instanz außerhalb des
+Repositorys unter `/workspace/backups/before-optimizations-20261030` gesichert.
+Dieser Pfad gehört nicht zum Git-Commit. In einer anderen Umgebung existiert
+er nicht automatisch; dort vor Migration eine eigene Sicherung erstellen.
