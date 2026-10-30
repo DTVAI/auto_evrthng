@@ -4,7 +4,7 @@ const state =  {
   }
   , view:'home', category:'all', stage:'all', query:'', tool:null, tab:'test', result:null, currentCase:null, jobs:[], jobResult:null, imported:null, pendingJobKey:null, drafts: {
   }
-  , feedback:'', error:false
+  , feedback:'', error:false, dirty:false, dirtyScopes:new Set(), formErrors:[], csvTarget:'', csvMapping:{}, workflows:[], currentWorkflow:null
 }
 ;
 const esc = x => String(x ?? '').replace(/[&<>"']/g, c => ( {
@@ -55,6 +55,22 @@ function flash(message, error=false) {
   state.feedback=message;
   state.error=error
 }
+function dirtyScope() {
+  if(state.view==='tool' && state.tool) return 'tool:'+state.tool.id;
+  if(state.view==='case' && state.currentCase) return 'case:'+state.currentCase.id;
+  if(state.view==='workflow' && state.currentWorkflow) return 'workflow:'+state.currentWorkflow.id;
+  if(state.view==='workflows') return 'workflows:new';
+  return null;
+}
+function markDirty() {
+  const scope=dirtyScope();
+  if(scope) state.dirtyScopes.add(scope);
+  state.dirty = state.dirtyScopes.size>0;
+}
+function clearDirty(scope) {
+  state.dirtyScopes.delete(scope);
+  state.dirty = state.dirtyScopes.size>0;
+}
 function feedback() {
   return state.feedback ? `<div class="feedback ${state.error?'error':''}" role="status">${esc(state.feedback)}</div>`:''
 }
@@ -69,7 +85,7 @@ function shell(content) {
 <span class="brand-mark">✳</span>Werkraum<span style="color:#aab4ac;font-size:10px;letter-spacing:0;margin-left:auto">HR</span>
 </div>
 <div class="side-label">Arbeitsbereich</div>
-<nav class="nav" aria-label="Hauptnavigation">${navButton('Übersicht','home','▧')}${navButton('Alle Werkzeuge','tools','▦',`<span class="side-count">${state.tools.length}</span>`)}${navButton('Vorgänge','cases','□',`<span class="side-count">${state.cases.length}</span>`)}${navButton('Prüfaufträge','jobs','◷',`<span class="side-count">${state.jobs.length}</span>`)}</nav>
+<nav class="nav" aria-label="Hauptnavigation">${navButton('Übersicht','home','▧')}${navButton('Alle Werkzeuge','tools','▦',`<span class="side-count">${state.tools.length}</span>`)}${navButton('Vorgänge','cases','□',`<span class="side-count">${state.cases.length}</span>`)}${navButton('Prüfaufträge','jobs','◷',`<span class="side-count">${state.jobs.length}</span>`)}${navButton('Fallketten','workflows','⇄')}</nav>
 <div class="side-label">Bereiche</div>
 <nav class="nav" aria-label="Werkzeugbereiche">${categories().map(([id,name],i)=>`<button data-action="category" data-category="${esc(id)}" class="${state.view==='tools'&&state.category===id?'active':''}">
 <span class="nav-icon">${icon(i)}</span>${esc(name)}</button>`).join('')}</nav>
@@ -80,7 +96,7 @@ function shell(content) {
 </aside>
 <main class="main">
 <header class="topbar">
-<div class="breadcrumb">Werkraum &nbsp; / &nbsp; <strong>${esc(({home:'Übersicht',tools:'Werkzeuge',tool:'Werkzeug',cases:'Vorgänge',case:'Vorgang',jobs:'Prüfaufträge'})[state.view])}</strong>
+<div class="breadcrumb">Werkraum &nbsp; / &nbsp; <strong>${esc(({home:'Übersicht',tools:'Werkzeuge',tool:'Werkzeug',cases:'Vorgänge',case:'Vorgang',jobs:'Prüfaufträge',workflows:'Fallketten',workflow:'Fallkette'})[state.view])}</strong>
 </div>
 <label class="search">
 <span class="sr-only">Werkzeuge durchsuchen</span>
@@ -195,25 +211,52 @@ function resultView(r,artifacts) {
 </details>${as.length?`<h3>Artefakte</h3>
 <div class="actions">${as.map(a=>`<a class="button" href="${esc(a.download_url || '/api/artifacts/'+a.id+'/download')}" download>↓ ${esc(a.name)}</a>`).join('')}</div>`:''}</div>`
 }
-function primitiveInputs(t) {
-  const sample=t.sample|| {
-  }
-  ;
-  let draft=state.drafts[t.id+':payload'];
-  let data=sample;
-  try  {
-    if(draft) data=JSON.parse(draft)
-  }
-  catch  {
-  }
-  const fields=Object.entries(sample).filter(([,v])=>v!==null && ['string','number','boolean'].includes(typeof v));
-  if(!fields.length) return `<p>Dieses Beispiel enthält verschachtelte Daten. Bearbeiten Sie sie im JSON-Feld.</p>`;
-  return `<div class="primitive-fields">${fields.map(([key,example])=>{let value=data?.[key]??example;return `<label class="field">
-<span>${esc(t.help?.input_fields?.find(f=>f.path===key)?.description || key)} <small>(${esc(key)})</small></span>${typeof example==='boolean'?`<select data-primitive="${esc(key)}" data-type="boolean">
-<option value="true" ${value===true?'selected':''}>Ja</option>
-<option value="false" ${value===false?'selected':''}>Nein</option>
-</select>`:`<input data-primitive="${esc(key)}" data-type="${typeof example}" type="${typeof example==='number'?'number':'text'}" value="${esc(value)}">`}</label>`}).join('')}</div>`;
+function schemaFor(t) { return t.input_schema || {type:'object', properties:Object.fromEntries(Object.entries(t.sample || {}).map(([k,v])=>[k,inferSchema(v)]))}; }
+function inferSchema(v) {
+  if(Array.isArray(v)) return {type:'array',items:inferSchema(v[0] ?? {})};
+  if(v && typeof v==='object') return {type:'object',properties:Object.fromEntries(Object.entries(v).map(([k,x])=>[k,inferSchema(x)]))};
+  return {type:typeof v==='number'?'number':typeof v==='boolean'?'boolean':'string'};
 }
+function resolvedSchema(schema, root) {
+  if(schema?.$ref) return schema.$ref.slice(2).split('/').reduce((v,k)=>v?.[k],root) || {};
+  if(schema?.anyOf) return schema.anyOf.find(x=>x.type!=='null') || schema.anyOf[0];
+  return schema || {};
+}
+function schemaTypeMatches(schema,value) { const t=schema?.type; return t==='integer' ? typeof value==='number' && Number.isInteger(value) : t==='number' ? typeof value==='number' : t==='array' ? Array.isArray(value) : t==='object' ? value!==null && typeof value==='object' && !Array.isArray(value) : t==='null' ? value===null : t===typeof value; }
+function fieldName(t,path,schema) { return schema.title || t.help?.input_fields?.find(f=>f.path===path.join('.'))?.description || path.at(-1) || 'Eingaben'; }
+function blankValue(schema,root) { schema=resolvedSchema(schema,root); if(schema.type==='object') return Object.fromEntries((schema.required||[]).map(k=>[k,blankValue(schema.properties[k],root)])); if(schema.type==='array') return []; return null; }
+function schemaAt(root,path) { return path.reduce((schema,k)=>{ schema=resolvedSchema(schema,root); return typeof k==='number'?schema.items:(schema.properties?.[k] || (typeof schema.additionalProperties==='object'?schema.additionalProperties:undefined)); },root); }
+function formFields(t,schema,value,path=[],root=schemaFor(t),required=false) {
+  schema=schema?.anyOf ? (schema.anyOf.find(x=>schemaTypeMatches(x,value)) || schema.anyOf[0]) : resolvedSchema(schema,root); if(schema.format==='json-value') schema=inferSchema(value); const type=schema.type || (schema.properties?'object':null);
+  const name=fieldName(t,path,schema), key=esc(JSON.stringify(path));
+  if(type==='object') { const props={...(schema.properties||{})}; if(typeof schema.additionalProperties==='object') for(const k of Object.keys(value||{})) if(!Object.hasOwn(props,k)) props[k]=schema.additionalProperties; return `<fieldset class="schema-group"><legend>${esc(name)}</legend><div class="primitive-fields">${Object.entries(props).map(([k,child])=>formFields(t,child,value?.[k],path.concat(k),root,(schema.required||[]).includes(k))).join('')}</div>${typeof schema.additionalProperties==='object'?`<label class="field"><span>Neuer Schlüssel für ${esc(name)}</span><input data-map-key="${key}"></label><button class="button" data-action="add-map-key" data-path="${key}">Eintrag hinzufügen</button>`:''}</fieldset>`; }
+  if(type==='array') return `<fieldset class="schema-group"><legend>${esc(name)}</legend>${(Array.isArray(value)?value:[]).map((row,i)=>`<div class="schema-row">${formFields(t,schema.items,row,path.concat(i),root)}<button class="button" data-action="remove-row" data-path="${key}" data-index="${i}">Zeile ${i+1} entfernen</button></div>`).join('')}<button class="button" data-action="add-row" data-path="${key}">Zeile hinzufügen</button></fieldset>`;
+  const missing=value===undefined || value===null || value==='';
+  const err=state.formErrors.find(x=>JSON.stringify(x.path)===JSON.stringify(path));
+  let control;
+  if(type==='boolean') control=`<select data-schema-path="${key}" data-type="boolean"><option value="">Bitte wählen</option><option value="true" ${value===true?'selected':''}>Ja</option><option value="false" ${value===false?'selected':''}>Nein</option></select>`;
+  else if(schema.enum) control=`<select data-schema-path="${key}" data-type="${esc(type||'string')}"><option value="">Bitte wählen</option>${schema.enum.map(x=>`<option value="${esc(x)}" ${x===value?'selected':''}>${esc(x)}</option>`).join('')}</select>`;
+  else control=`<input data-schema-path="${key}" data-type="${esc(type||'string')}" type="${type==='number'||type==='integer'?'number':'text'}" ${type==='number'?'step="any"':''} value="${esc(missing?'':value)}" ${err?'aria-invalid="true"':''}>`;
+  return `<label class="field"><span>${esc(name)}${required?' *':''} <small>(${esc(path.join('.'))})</small></span>${control}${schema.description?`<small>${esc(schema.description)}</small>`:''}${schema.format==='date-time'?'<small>Zeitpunkt mit Offset eingeben, z. B. 2026-10-25T02:30:00+02:00 (Europe/Berlin).</small>':''}${err?`<small class="field-error">${esc(err.message)}</small>`:''}</label>`;
+}
+function validateSchema(schema,value,path=[],root=schema,required=false) {
+  if(schema?.anyOf) { const choices=schema.anyOf.map(choice=>validateSchema(choice,value,path,root,required)); if(choices.some(errors=>!errors.length)) return []; return choices.find((_,i)=>schemaTypeMatches(schema.anyOf[i],value)) || choices[0]; }
+  schema=resolvedSchema(schema,root); const errors=[]; const type=schema.type || (schema.properties?'object':null);
+  if(value===undefined || value===null || value==='') { if(required || value===null) errors.push({path,message:'Bitte einen Wert eingeben.'}); return errors; }
+  if(type==='object') { if(typeof value!=='object'||Array.isArray(value)) return [{path,message:'Ein Objekt wird benötigt.'}]; for(const [k,v] of Object.entries(schema.properties||{})) errors.push(...validateSchema(v,value[k],path.concat(k),root,(schema.required||[]).includes(k))); if(typeof schema.additionalProperties==='object') for(const k of Object.keys(value)) if(!Object.hasOwn(schema.properties||{},k)) errors.push(...validateSchema(schema.additionalProperties,value[k],path.concat(k),root,true)); }
+  else if(type==='array') { if(!Array.isArray(value)) return [{path,message:'Eine Liste wird benötigt.'}]; value.forEach((v,i)=>errors.push(...validateSchema(schema.items,v,path.concat(i),root,true))); if(schema.minItems && value.length<schema.minItems)errors.push({path,message:`Mindestens ${schema.minItems} Zeilen erforderlich.`}); }
+  else if((type==='number'||type==='integer') && (typeof value!=='number'||!Number.isFinite(value)||(type==='integer'&&!Number.isInteger(value)))) errors.push({path,message:'Bitte eine gültige Zahl eingeben.'});
+  else if(type==='string' && typeof value!=='string') errors.push({path,message:'Bitte Text eingeben.'});
+  else if(type==='boolean' && typeof value!=='boolean') errors.push({path,message:'Bitte Ja oder Nein wählen.'});
+  if(type==='string' && typeof value==='string' && schema.pattern && !(new RegExp(schema.pattern)).test(value)) errors.push({path,message:'Bitte ein gültiges Format eingeben.'});
+  if(type==='string' && schema.format==='date-time' && typeof value==='string' && (!/(Z|[+-]\d{2}:\d{2})$/.test(value)||Number.isNaN(Date.parse(value)))) errors.push({path,message:'Bitte Zeitpunkt mit UTC-Offset eingeben.'});
+  if(schema.enum && !schema.enum.includes(value))errors.push({path,message:'Bitte einen gültigen Wert auswählen.'});
+  return errors;
+}
+function payloadData(t) { try { return JSON.parse(state.drafts[t.id+':payload'] ?? pretty(t.sample||{})); } catch { return null; } }
+function primitiveInputs(t) { const data=payloadData(t); return data ? formFields(t,schemaFor(t),data) : '<p class="field-error">Ungültiges JSON: Bitte zuerst den Expertenmodus korrigieren.</p>'; }
+function setPath(obj,path,value,remove=false) { let parent=obj; for(let i=0;i<path.length-1;i++) { const k=path[i]; if(parent[k]===undefined || parent[k]===null) parent[k]=typeof path[i+1]==='number'?[]:{}; parent=parent[k]; } if(remove) delete parent[path.at(-1)]; else parent[path.at(-1)]=value; }
+function validPayload() { const payload=parseObject('payload'); state.formErrors=validateSchema(schemaFor(state.tool),payload); if(state.tool.id==='R10') { for(const path of [['start'],['end'],...(payload.busy||[]).flatMap((_,i)=>[['busy',i,'start'],['busy',i,'end']])]) { const value=path.reduce((v,k)=>v?.[k],payload); if(value) try { berlinToUTC(value); } catch(e) { state.formErrors.push({path,message:e.message}); } } } if(state.formErrors.length) { render(); throw new Error('Bitte die markierten Eingabefelder korrigieren.'); } return payload; }
 function metadataContent(value) {
   if(Array.isArray(value)) return `<div class="info-list">${value.map((v,i)=>typeof v==='object' && v!==null ? `<div>
 <strong>${esc(v.title || 'Schritt '+(i+1))}${v.actor?' · '+esc(v.actor):''}</strong>
@@ -251,18 +294,22 @@ function metadata(t) {
 function importPreview() {
   const result=state.imported;
   if (!result || result.tool_id !== state.tool?.id) return '';
+  const csv=result.format==='csv' && Array.isArray(result.data); const arrays=Object.entries(schemaFor(state.tool).properties||{}).filter(([,v])=>resolvedSchema(v,schemaFor(state.tool)).type==='array');
+  const target=state.csvTarget || arrays[0]?.[0]; const item=resolvedSchema(resolvedSchema(schemaFor(state.tool).properties?.[target],schemaFor(state.tool)).items,schemaFor(state.tool)); const columns=Object.keys(result.data?.[0]||{});
   return `<div class="result">
 <h3>Importvorschau</h3>
 <p>${esc(result.filename)} · ${esc(result.format)} · ${esc(result.record_count)} Datensätze</p>
 <p>Quellen-Hash: ${esc(result.source_hash)}</p>${(result.warnings||[]).map(w=>`<div class="feedback">${esc(w)}</div>`).join('')}<details>
 <summary>Importierte Daten anzeigen</summary>
 <pre>${esc(pretty(result.data))}</pre>
-</details>${result.tool_payload?`<button class="button" data-action="apply-import">In Testdaten übernehmen</button>`:'<p>Die Daten müssen manuell den Testdaten zugeordnet werden.</p>'}</div>`;
+</details>${csv ? `<label class="field"><span>Zielliste</span><select id="csv-target">${arrays.map(([k])=>`<option value="${esc(k)}" ${k===target?'selected':''}>${esc(k)}</option>`).join('')}</select></label>${Object.entries(item.properties||{}).map(([k,v])=>`<label class="field"><span>${esc(k)} ${item.required?.includes(k)?'*':''} · CSV-Spalte</span><select data-csv-field="${esc(k)}"><option value="">Nicht zugeordnet</option>${columns.map(c=>`<option value="${esc(c)}" ${(state.csvMapping[k]||'')===c?'selected':''}>${esc(c)}</option>`).join('')}</select></label>`).join('')}<div id="csv-errors">${csvErrors(result,target,item).map(x=>`<p class="field-error">${esc(x)}</p>`).join('')}</div><button class="button" data-action="apply-csv">Zuordnung ausdrücklich übernehmen</button>` : result.tool_payload?`<button class="button" data-action="apply-import">In Testdaten übernehmen</button>`:'<p>Die Daten müssen manuell den Testdaten zugeordnet werden.</p>'}</div>`;
 }
+function csvRows(result,item) { return result.data.map(row=>Object.fromEntries(Object.entries(item.properties||{}).flatMap(([k,s])=>{ const column=state.csvMapping[k]; if(!column || row[column]==='') return []; const raw=row[column], type=resolvedSchema(s,schemaFor(state.tool)).type; return [[k,type==='number'||type==='integer'?Number(raw):type==='boolean'?(raw.toLowerCase()==='true'?true:raw.toLowerCase()==='false'?false:raw):raw]]; }))); }
+function csvErrors(result,target,item) { if(!target) return ['Dieses Werkzeug hat keine zuordenbare Zielliste.']; const rows=csvRows(result,item); return rows.flatMap((row,i)=>validateSchema(item,row,[],schemaFor(state.tool),true).map(e=>`Zeile ${i+1}, ${e.path.join('.')}: ${e.message}`)); }
 function localHelp(t) {
   const help=t.help;
   if(!help) return `<div class="panel"><h3>Lokale Prüfung</h3><p>Für diese Prüfung stehen noch keine weiteren Erläuterungen zur Verfügung.</p></div>`;
-  return `<div class="panel"><h3>Was die lokale Prüfung tatsächlich macht</h3><p>${esc(help.what_it_checks)}</p><p>${esc(help.note)}</p><p>Erwarteter Status des synthetischen Beispiels: ${esc(labels[help.sample_status] || help.sample_status || 'unbekannt')}.</p><h3>Eingabefelder im Beispiel</h3>${help.input_fields?.length?`<div class="table-wrap"><table><thead><tr><th>Feld</th><th>Bedeutung</th><th>Beispiel</th></tr></thead><tbody>${help.input_fields.map(f=>`<tr><td><code>${esc(f.path)}</code></td><td>${esc(f.description)}</td><td><code>${esc(text(f.example))}</code></td></tr>`).join('')}</tbody></table></div>`:'<p>Keine Felder dokumentiert.</p>'}</div>`;
+  return `<div class="panel"><h3>Was tut es?</h3><p>${esc(help.what_it_checks)}</p><h3>Wann hilft es?</h3><p>${esc(text(t.goal))}</p><h3>Benötigte Angaben</h3><p>${esc(text(t.inputs))}</p><h3>Ergebnis und offene Schritte</h3><p>${esc(help.note)}</p><p>Erwarteter Status des synthetischen Beispiels: ${esc(labels[help.sample_status] || help.sample_status || 'unbekannt')}.</p><h3>Eingabefelder im Beispiel</h3>${help.input_fields?.length?`<div class="table-wrap"><table><thead><tr><th>Feld</th><th>Bedeutung</th><th>Beispiel</th></tr></thead><tbody>${help.input_fields.map(f=>`<tr><td><code>${esc(f.path)}</code></td><td>${esc(f.description)}</td><td><code>${esc(text(f.example))}</code></td></tr>`).join('')}</tbody></table></div>`:'<p>Keine Felder dokumentiert.</p>'}</div>`;
 }
 function toolView() {
   let t=state.tool;
@@ -278,7 +325,7 @@ function toolView() {
 <span class="tag blue">TEST</span>
 </div>${feedback()}${primitiveInputs(t)}<label class="field">
 <span>Vollständige Testdaten · JSON-Objekt</span>
-<small class="muted">Verschachtelte Daten und Listen bearbeiten Sie im JSON. Änderungen oben werden hier übernommen.</small>
+<small class="muted">Expertenmodus: Formular und JSON werden synchronisiert.</small>
 <textarea id="payload" spellcheck="false">${esc(pretty(t.sample || {}))}</textarea>
 </label>
 <div class="actions">
@@ -297,8 +344,9 @@ function toolView() {
 <h3>Lokalen Test vormerken</h3>
 <p>Der Prüfauftrag wird gespeichert und nur durch den lokalen Worker verarbeitet. Er führt keine externen Aktionen aus.</p>
 <label class="field">
-<span>Fällig am (UTC, optional)</span>
-<input id="job-due" type="datetime-local">
+<span>Fällig am (Europe/Berlin, mit UTC-Offset, optional)</span>
+<input id="job-due" type="text" placeholder="2026-10-25T02:30:00+02:00">
+<small>Offset ausdrücklich angeben, z. B. +01:00 oder +02:00. Bei Zeitumstellung entscheidet er über die eindeutige Uhrzeit.</small>
 </label>
 <button class="button" data-action="schedule-job">Prüfauftrag anlegen</button>
 </div>${resultView(state.result)}</div>
@@ -348,7 +396,7 @@ function toolView() {
 </div>
 <span class="tag blue">${esc(t.stage||'')}</span>
 </div>
-<div class="tabs" role="tablist">${[['test','Anwenden & testen'],['how','So funktioniert’s'],['cases','Vorgänge']].map(([id,label])=>`<button role="tab" aria-selected="${state.tab===id}" class="${state.tab===id?'active':''}" data-action="tab" data-tab="${id}">${label}</button>`).join('')}</div>${body}`
+<div class="tabs" role="tablist" aria-label="Werkzeugansichten">${[['test','Anwenden & testen'],['how','So funktioniert’s'],['cases','Vorgänge']].map(([id,label])=>`<button id="tab-${id}" role="tab" aria-controls="panel-${id}" tabindex="${state.tab===id?0:-1}" aria-selected="${state.tab===id}" class="${state.tab===id?'active':''}" data-action="tab" data-tab="${id}">${label}</button>`).join('')}</div><div id="panel-${state.tab}" role="tabpanel" aria-labelledby="tab-${state.tab}" tabindex="0">${body}</div>`
 }
 function caseList(cases) {
   return cases.length?cases.map(c=>`<div class="case-row">
@@ -370,11 +418,12 @@ function casesView() {
 </div>
 <div class="panel">${caseList(state.cases)}</div>`
 }
+function equalJson(a,b) { if(a===b)return true; if(!a || !b || typeof a!=='object' || typeof b!=='object' || Array.isArray(a)!==Array.isArray(b))return false; const keys=Object.keys(a); return keys.length===Object.keys(b).length && keys.every(k=>Object.hasOwn(b,k)&&equalJson(a[k],b[k])); }
 function caseView() {
   let c=state.currentCase;
   if(!c)return '';
   let approval=c.approvals?.some(a=>a.revision===c.revision&&a.payload_hash===c.payload_hash);
-  let proof=c.evidence?.some(e=>e.revision===c.revision&&e.kind==='independent_readback'&&e.reference?.trim()&&e.observed_hash===c.payload_hash);
+  let proof=c.evidence?.some(e=>e.revision===c.revision&&e.kind==='independent_readback'&&e.reference?.trim()&&c.expected_observation && Object.entries(c.expected_observation).every(([k,v])=>equalJson(e.observed?.[k],v)));
   return `<button class="text-link back" data-action="navigate" data-view="cases">← Alle Vorgänge</button>
 <div class="page-head">
 <div>
@@ -396,7 +445,7 @@ function caseView() {
 </label>
 <button class="button" data-action="save-case">Neue Revision speichern</button>${resultView(c.result,c.artifacts)}</div>
 <div class="panel">
-<h3>Freigabe der aktuellen Revision</h3>
+<h3>Lokale Zuständigkeit</h3><p>Selbst angegebene Identität und Vertretung; keine Anmeldung oder rollenbasierte Zugriffskontrolle.</p><label class="field"><span>Lokale Identität *</span><input id="claim-identity"></label><label class="field"><span>Vertretung für (optional)</span><input id="claim-deputy"></label><div class="actions"><button class="button" data-action="claim">Übernehmen</button><button class="button" data-action="release">Freigeben</button></div><p>Aktuelle Zuständigkeit: ${esc(text(c.claim || 'Keine'))}</p></div><div class="panel"><h3>Freigabe der aktuellen Revision</h3>
 <p>Die Freigabe wird an den Inhalt dieser Revision und ihren Hash gebunden.</p>
 <label class="field">
 <span>Kommentar (optional)</span>
@@ -406,8 +455,8 @@ function caseView() {
 </div>
 <div class="panel">
 <h3>Manuelle Bestätigung einer unabhängigen Rücklesung</h3>
-<p>Sie bestätigen hier selbst eine tatsächlich unabhängig durchgeführte Rücklesung. Die Anwendung prüft keine externe Quelle automatisch. Für den Abschluss muss das beobachtete JSON das vollständige aktuelle Eingabeobjekt exakt wiedergeben; dies ist eine Einschränkung dieses lokalen Nachweisverfahrens.</p>
-<label class="field">
+<p>Sie bestätigen hier selbst eine tatsächlich unabhängig durchgeführte Rücklesung. Die Anwendung prüft keine externe Quelle automatisch. Für den Abschluss müssen die relevanten Werte der erwarteten Zielprojektion in der beobachteten Rücklesung enthalten sein. Übernehmen Sie nur selbst unabhängig beobachtete Werte.</p>
+<p>Erwartete Zielprojektion zur Orientierung: <code>${esc(pretty(c.expected_observation))}</code>. Diese Anzeige ist kein Nachweis.</p><label class="field">
 <span>Art der manuellen Bestätigung</span>
 <select id="evidence-kind">
 <option value="independent_readback">Unabhängige Rücklesung (manuell bestätigt)</option>
@@ -439,7 +488,7 @@ function caseView() {
 <div class="check ${approval?'':'fail'}">
 <b>${approval?'✓':'○'}</b> Aktuelle Revision freigegeben</div>
 <div class="check ${proof?'':'fail'}">
-<b>${proof?'✓':'○'}</b> Manuelle Rücklesung passend bestätigt</div>
+<b>${proof?'✓':'○'}</b> Manuelle Rücklesung passend bestätigt</div><p>Freigabe aktuell: ${approval ? 'ja' : 'nein'} · Nachweismethode: unabhängige Rücklesung, manuell bestätigt</p>
 <p style="margin-top:16px;word-break:break-all">Inhalts-Hash: ${esc(c.payload_hash)}</p>
 <button class="button primary" data-action="complete">Vorgang abschließen</button>
 </div>
@@ -463,13 +512,17 @@ function jobsView() {
 <div class="panel" style="margin-top:16px">${state.jobs.length?state.jobs.map(j=>`<div class="case-row">
 <div style="flex:1">
 <strong>${esc(j.tool_id)} · Auftrag #${j.id}</strong>
-<small>Fällig: ${esc(j.due_at || 'sofort')} · Versuche: ${j.attempts}</small>
+<small>Fällig: ${esc(j.due_at ? berlinDisplay(j.due_at) : 'sofort')} · Versuche: ${j.attempts}</small>
 </div>${status(j.status)}${j.run_id?`<button class="text-link" data-action="open-run" data-id="${j.run_id}" style="flex:none">Ergebnis ↗</button>`:''}</div>`).join(''):`<div class="empty">
 <strong>Noch keine Prüfaufträge.</strong>Ein lokaler Test kann bei einem Werkzeug vorgemerkt werden.</div>`}${state.jobResult?resultView(state.jobResult):''}</div>`
 }
+const workflowKinds={hours_change:['Stundenänderung','change','draft','hr_record'],start_shift:['Eintrittsverschiebung','event','tasks','document','commitments'],staffing_invoice:['ANÜ-Rechnung','hours','invoice','correction']};
+function workflowsView() { return `<div class="page-head"><div><h1>Fallketten.</h1><p>Lokale Schritte, Abhängigkeiten und dokumentierte Vorgänge.</p></div></div>${feedback()}<div class="panel"><h3>Fallkette anlegen</h3><label class="field"><span>Art</span><select id="workflow-kind">${Object.entries(workflowKinds).map(([k,v])=>`<option value="${k}">${v[0]}</option>`).join('')}</select></label><label class="field"><span>Titel *</span><input id="workflow-title"></label><label class="field"><span>Quellenreferenz</span><input id="workflow-source"></label><p>Schrittdaten können nach dem Anlegen im JSON-Editor ergänzt werden.</p><button class="button primary" data-action="create-workflow">Fallkette anlegen</button></div><div class="panel">${state.workflows.map(w=>`<div class="case-row"><button data-action="open-workflow" data-id="${w.id}"><strong>${esc(w.title)}</strong><small>${esc(workflowKinds[w.kind]?.[0]||w.kind)} · Revision ${w.revision}</small></button>${status(w.status)}</div>`).join('') || '<p>Noch keine Fallketten.</p>'}</div>`; }
+function workflowView() { const w=state.currentWorkflow; if(!w)return ''; return `<button class="text-link back" data-action="navigate" data-view="workflows">← Alle Fallketten</button><div class="page-head"><div><h1>${esc(w.title)}</h1><p>${esc(workflowKinds[w.kind]?.[0]||w.kind)} · Revision ${w.revision}</p></div></div>${feedback()}<div class="panel"><h3>Schrittdaten bearbeiten</h3><label class="field"><span>Titel</span><input id="workflow-edit-title" value="${esc(w.title)}"></label><label class="field"><span>Schrittdaten · JSON</span><textarea id="workflow-payload">${esc(pretty(w.payload))}</textarea></label><button class="button" data-action="save-workflow">Neue Revision speichern</button></div><div class="panel"><h3>Schritte und Abhängigkeiten</h3>${(w.steps||[]).map(step=>`<div class="schema-row"><h3>${esc(step.key)} · ${esc(step.tool_id)}</h3><p>Status: ${esc(step.status)} · Abhängigkeiten: ${esc(text(step.depends_on))} · Vorgang: ${esc(step.case_id||'noch keiner')}</p><label class="field"><span>Abgeschlossene Vorgangs-ID zuordnen</span><input id="workflow-case-${step.id}" type="number" min="1"></label><button class="button" data-action="attach-step" data-id="${step.id}">Vorgang zuordnen</button></div>`).join('')}</div><div class="panel"><h3>Prozessmetriken</h3><pre>${esc(pretty(w.metrics))}</pre><details><summary>Verlauf und Ereignisse</summary><pre>${esc(pretty({history:w.history,events:w.events}))}</pre></details></div>`; }
 function render() {
+  const focus=document.activeElement; const focusId=focus?.id; const focusPath=focus?.dataset?.schemaPath; const selection=typeof focus?.selectionStart==='number' ? [focus.selectionStart,focus.selectionEnd] : null;
   app.innerHTML=shell(( {
-    home,tools:toolsView,tool:toolView,cases:casesView,case:caseView,jobs:jobsView
+    home,tools:toolsView,tool:toolView,cases:casesView,case:caseView,jobs:jobsView,workflows:workflowsView,workflow:workflowView
   }
   )[state.view]());
   let key=state.view==='tool'&&state.tool?state.tool.id:state.view==='case'&&state.currentCase?'case-'+state.currentCase.id:null;
@@ -479,6 +532,7 @@ function render() {
       if(value!==undefined && el.type!=='file')el.value=value
     }
   }
+  const next=focusId ? document.getElementById(focusId) : focusPath ? [...app.querySelectorAll('[data-schema-path]')].find(x=>x.dataset.schemaPath===focusPath) : null; if(next) { next.focus(); if(selection && next.setSelectionRange) try { next.setSelectionRange(...selection); } catch {} }
 }
 function parseObject(id) {
   let v;
@@ -501,33 +555,20 @@ async function openCase(id) {
 }
 app.addEventListener('input',e=> {
   let key=state.view==='tool'&&state.tool?state.tool.id:state.view==='case'&&state.currentCase?'case-'+state.currentCase.id:null;
-  if(state.view==='tool' && (e.target.id==='payload' || e.target.id==='job-due' || e.target.dataset.primitive)) state.pendingJobKey=null;
+  if(state.view==='tool' && (e.target.id==='payload' || e.target.id==='job-due' || e.target.dataset.schemaPath)) state.pendingJobKey=null;
   if(key&&e.target.id&&e.target.id!=='global-search'&&e.target.type!=='file') state.drafts[key+':'+e.target.id]=e.target.value;
-  if(e.target.dataset.primitive) {
-    try  {
-      let editor=document.getElementById('payload');
-      let data=JSON.parse(editor.value);
-      let v=e.target.value;
-      if(e.target.dataset.type==='boolean')v=v==='true';
-      if(e.target.dataset.type==='number')v=Number(v);
-      data[e.target.dataset.primitive]=v;
-      editor.value=pretty(data);
-      state.drafts[state.tool.id+':payload']=editor.value
-    }
-    catch {
-      flash('Bitte zuerst das JSON korrigieren.',true);
-      let f=document.querySelector('.feedback[role=status]');
-      if(f)f.textContent=state.feedback
-    }
-  }
-  if(e.target.id==='payload') {
+  if((key || state.view==='workflow' || state.view==='workflows') && e.target.id!=='global-search' && e.target.type!=='file') markDirty();
+  if(e.target.dataset.schemaPath) {
     try {
-      let data=JSON.parse(e.target.value);
-      for(const input of app.querySelectorAll('[data-primitive]'))if(Object.hasOwn(data,input.dataset.primitive))input.value=String(data[input.dataset.primitive])
-    }
-    catch {
-    }
+      const editor=document.getElementById('payload'), data=JSON.parse(editor.value), path=JSON.parse(e.target.dataset.schemaPath); let v=e.target.value;
+      if(v==='') setPath(data,path,null);
+      else { if(e.target.dataset.type==='boolean') v=v==='true'; if(['number','integer'].includes(e.target.dataset.type)) v=Number(v); setPath(data,path,v); }
+      editor.value=pretty(data); state.drafts[state.tool.id+':payload']=editor.value; state.formErrors=validateSchema(schemaFor(state.tool),data); const error=state.formErrors.find(x=>JSON.stringify(x.path)===JSON.stringify(path)); const label=e.target.closest('label'); let message=label.querySelector('.field-error'); if(error) { e.target.setAttribute('aria-invalid','true'); if(!message) { message=document.createElement('small'); message.className='field-error'; label.append(message); } message.textContent=error.message; } else { e.target.removeAttribute('aria-invalid'); message?.remove(); }
+    } catch { flash('Bitte zuerst das JSON korrigieren.',true); }
   }
+  if(e.target.id==='payload') { try { const data=JSON.parse(e.target.value); state.formErrors=validateSchema(schemaFor(state.tool),data); render(); } catch {} }
+  if(e.target.id==='csv-target') { state.csvTarget=e.target.value; state.csvMapping={}; render(); }
+  if(e.target.dataset.csvField) { state.csvMapping[e.target.dataset.csvField]=e.target.value; render(); }
   if(e.target.id==='global-search') {
     state.query=e.target.value;
     state.view='tools';
@@ -548,12 +589,17 @@ app.addEventListener('click',async e=> {
   try {
     if(action==='navigate') {
       state.view=b.dataset.view;
+      if(state.view==='workflows') state.workflows=await api('/api/workflows');
       state.feedback='';
       if(state.view==='tools') {
         state.category='all';
         state.stage='all'
       }
     }
+    else if(action==='create-workflow') { const kind=document.getElementById('workflow-kind').value,title=document.getElementById('workflow-title').value.trim(); if(!title) throw new Error('Bitte einen Titel eingeben.'); const payload={}; state.currentWorkflow=await api('/api/workflows',{method:'POST',body:JSON.stringify({kind,title,payload,source_ref:document.getElementById('workflow-source').value.trim()||null})}); state.workflows=await api('/api/workflows'); clearDirty('workflows:new'); state.view='workflow'; }
+    else if(action==='open-workflow') { state.currentWorkflow=await api('/api/workflows/'+b.dataset.id); state.view='workflow'; }
+    else if(action==='save-workflow') { let w=state.currentWorkflow; state.currentWorkflow=await api('/api/workflows/'+w.id,{method:'PATCH',body:JSON.stringify({revision:w.revision,title:document.getElementById('workflow-edit-title').value.trim(),payload:parseObject('workflow-payload')})}); clearDirty('workflow:'+w.id); flash('Fallkette aktualisiert.'); }
+    else if(action==='attach-step') { let w=state.currentWorkflow, case_id=Number(document.getElementById('workflow-case-'+b.dataset.id).value); if(!case_id) throw new Error('Bitte eine Vorgangs-ID eingeben.'); state.currentWorkflow=await api('/api/workflows/'+w.id+'/steps/'+b.dataset.id+'/attach',{method:'POST',body:JSON.stringify({revision:w.revision,case_id})}); flash('Vorgang zugeordnet.'); }
     else if(action==='category'||action==='filter-category') {
       state.view='tools';
       state.category=b.dataset.category;
@@ -574,8 +620,11 @@ app.addEventListener('click',async e=> {
       state.tab=b.dataset.tab;
       state.feedback=''
     }
+    else if(action==='add-map-key') { const path=JSON.parse(b.dataset.path), key=b.parentElement.querySelector('[data-map-key]').value.trim(); if(!key || ['__proto__','constructor','prototype'].includes(key)) throw new Error('Bitte einen gültigen Schlüssel eingeben.'); const data=validPayloadForEdit(); let map=path.reduce((v,k)=>v?.[k],data); if(!map) { setPath(data,path,{}); map=path.reduce((v,k)=>v[k],data); } if(Object.hasOwn(map,key)) throw new Error('Dieser Schlüssel ist bereits vorhanden.'); const schema=resolvedSchema(schemaAt(schemaFor(state.tool),path),schemaFor(state.tool)); map[key]=blankValue(schema.additionalProperties,schemaFor(state.tool)); state.drafts[state.tool.id+':payload']=pretty(data); markDirty(); state.formErrors=validateSchema(schemaFor(state.tool),data); }
+    else if(action==='add-row'||action==='remove-row') { const path=JSON.parse(b.dataset.path), data=validPayloadForEdit(); let arr=path.reduce((v,k)=>v[k],data); if(!Array.isArray(arr)) { setPath(data,path,[]); arr=path.reduce((v,k)=>v[k],data); } if(action==='remove-row') arr.splice(Number(b.dataset.index),1); else { const schema=resolvedSchema(schemaAt(schemaFor(state.tool),path),schemaFor(state.tool)); arr.push(blankValue(schema.items,schemaFor(state.tool)));  } state.drafts[state.tool.id+':payload']=pretty(data); markDirty(); state.formErrors=validateSchema(schemaFor(state.tool),data); }
     else if(action==='load-sample') {
       state.pendingJobKey=null;
+      markDirty(); state.formErrors=[];
       state.drafts[state.tool.id+':payload']=pretty(state.tool.sample|| {
       }
       );
@@ -596,9 +645,10 @@ app.addEventListener('click',async e=> {
       if(!['json','eml','csv'].includes(format)) throw new Error('Bitte eine JSON-, EML- oder CSV-Datei auswählen.');
       let content=await file.text();
       if(content.length>800000) throw new Error('Die Datei darf höchstens 800.000 Zeichen enthalten.');
-      state.imported={...await api('/api/imports',{method:'POST',body:JSON.stringify({format,content,filename:file.name,tool_id:state.tool.id})}),tool_id:state.tool.id};
+      state.csvMapping={}; state.csvTarget=''; state.imported={...await api('/api/imports',{method:'POST',body:JSON.stringify({format,content,filename:file.name,tool_id:state.tool.id})}),tool_id:state.tool.id};
       flash('Datei lokal eingelesen. Bitte Vorschau und Zuordnung prüfen.');
     }
+    else if(action==='apply-csv') { const r=state.imported, target=state.csvTarget || Object.entries(schemaFor(state.tool).properties||{}).find(([,v])=>resolvedSchema(v,schemaFor(state.tool)).type==='array')?.[0], item=resolvedSchema(resolvedSchema(schemaFor(state.tool).properties?.[target],schemaFor(state.tool)).items,schemaFor(state.tool)); const errors=csvErrors(r,target,item); if(errors.length) { render(); throw new Error('Bitte die CSV-Zuordnung und Zeilenfehler korrigieren.'); } const data=validPayloadForEdit(); data[target]=csvRows(r,item); state.drafts[state.tool.id+':payload']=pretty(data); markDirty(); flash('CSV-Zeilen übernommen. Bitte die Daten prüfen.'); }
     else if(action==='apply-import') {
       state.pendingJobKey=null;
       if(!state.imported?.tool_payload) throw new Error('Keine Werkzeugdaten zum Übernehmen vorhanden.');
@@ -607,10 +657,10 @@ app.addEventListener('click',async e=> {
       flash('Importierte Daten und Quellenreferenz übernommen. Bitte vor der Prüfung kontrollieren.');
     }
     else if(action==='schedule-job') {
-      let payload=parseObject('payload');
+      let payload=validPayload();
       let due=document.getElementById('job-due').value;
       let body= {
-        tool_id:state.tool.id,payload,due_at:due?new Date(due+'Z').toISOString():null,idempotency_key:state.pendingJobKey ||= crypto.randomUUID()
+        tool_id:state.tool.id,payload,due_at:due?berlinToUTC(due):null,idempotency_key:state.pendingJobKey ||= crypto.randomUUID()
       }
       ;
       await api('/api/jobs', {
@@ -622,7 +672,7 @@ app.addEventListener('click',async e=> {
       flash('Lokaler Prüfauftrag angelegt. Der Worker verarbeitet ihn zur angegebenen Zeit.')
     }
     else if(action==='run-test') {
-      let payload=parseObject('payload');
+      let payload=validPayload();
       let result=await api('/api/tools/'+encodeURIComponent(state.tool.id)+'/test', {
         method:'POST',body:JSON.stringify(payload)
       }
@@ -634,7 +684,7 @@ app.addEventListener('click',async e=> {
       return
     }
     else if(action==='create-case') {
-      let payload=parseObject('payload');
+      let payload=validPayload();
       let title=document.getElementById('case-title').value.trim();
       if(!title)throw new Error('Bitte einen Titel für den Vorgang eingeben.');
       let c=await api('/api/tools/'+encodeURIComponent(state.tool.id)+'/cases', {
@@ -644,7 +694,7 @@ app.addEventListener('click',async e=> {
         )
       }
       );
-      await refresh();
+      clearDirty('tool:'+state.tool.id); await refresh();
       await openCase(c.id);
       flash('Vorgang geöffnet. Bei gleicher Quellenreferenz wird der bestehende Vorgang verwendet.')
     }
@@ -660,11 +710,12 @@ app.addEventListener('click',async e=> {
         )
       }
       );
-      delete state.drafts['case-'+c.id+':edit-title'];
+      clearDirty('case:'+c.id); delete state.drafts['case-'+c.id+':edit-title'];
       delete state.drafts['case-'+c.id+':edit-payload'];
       await refresh();
       flash('Neue Revision gespeichert und lokal geprüft.')
     }
+    else if(action==='claim'||action==='release') { let c=state.currentCase; const identity=document.getElementById('claim-identity').value.trim(); if(!identity) throw new Error('Bitte lokale Identität eingeben.'); await api('/api/cases/'+c.id+'/'+action,{method:'POST',body:JSON.stringify({identity,deputy_for:document.getElementById('claim-deputy').value.trim()||null})}); state.currentCase=await api('/api/cases/'+c.id); flash('Zuständigkeit aktualisiert.'); }
     else if(action==='approve') {
       let c=state.currentCase;
       state.currentCase=await api('/api/cases/'+c.id+'/approve', {
@@ -721,6 +772,17 @@ app.addEventListener('click',async e=> {
   } finally { if(mutating) b.disabled=false; }
 }
 );
+function validPayloadForEdit() { return parseObject('payload'); }
+function berlinToUTC(value) {
+  if(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?[+-]\d{2}:\d{2}$/.test(value)) throw new Error('Bitte Datum und Uhrzeit mit ausdrücklichem UTC-Offset eingeben.');
+  const date=new Date(value); if(Number.isNaN(date.valueOf())) throw new Error('Ungültiges Datum.');
+  const parts=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Berlin',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(date).replace(' ','T');
+  if(parts!==value.slice(0,16)) throw new Error('Diese Uhrzeit und dieser Offset passen nicht zu Europe/Berlin (Zeitumstellung prüfen).');
+  return date.toISOString();
+}
+function berlinDisplay(value) { return new Intl.DateTimeFormat('de-DE',{timeZone:'Europe/Berlin',dateStyle:'medium',timeStyle:'short'}).format(new Date(value))+' (Europe/Berlin)'; }
+window.addEventListener('beforeunload',e=>{ if(state.dirty) { e.preventDefault(); e.returnValue=''; } });
+app.addEventListener('keydown',e=>{ const tab=e.target.closest('[role=tab]'); if(!tab || !['ArrowLeft','ArrowRight','Home','End'].includes(e.key)) return; e.preventDefault(); const ids=['test','how','cases']; let i=ids.indexOf(tab.dataset.tab); i=e.key==='Home'?0:e.key==='End'?ids.length-1:(i+(e.key==='ArrowRight'?1:-1)+ids.length)%ids.length; state.tab=ids[i]; state.feedback=''; render(); document.getElementById('tab-'+ids[i]).focus(); });
 try {
   [state.tools,state.cases,state.dashboard,state.jobs]=await Promise.all([api('/api/tools'),api('/api/cases'),api('/api/dashboard'),api('/api/jobs')]);
   render()
